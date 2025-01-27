@@ -199,14 +199,14 @@ const prepareWitness = async (verificationHash) => {
     // Publisher / Identifier for publisher
     witness_sender_account_address: publisher,
     // Optional for aggregated witness hashes
-    // witness_merkle_proof: [
-    //   {
-    //     depth: "0",
-    //     left_leaf: verificationHash,
-    //     right_leaf: null,
-    //     successor: merkle_root,
-    //   },
-    // ],
+    witness_merkle_proof: [
+      {
+        depth: "0",
+        left_leaf: verificationHash,
+        right_leaf: null,
+        successor: merkle_root,
+      },
+    ],
   }
   return witness
 }
