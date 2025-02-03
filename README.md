@@ -1,4 +1,4 @@
-# data-accounting-external-verifier
+data-accounting-external-verifier
 JS Client,  scripts for signing , witnessiing and verifying revisiion <br/>
 
 ## Functional description

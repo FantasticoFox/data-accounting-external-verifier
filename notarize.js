@@ -207,7 +207,7 @@ const createRevisionWithMultipleAquaChain = async (timestamp, revisionType) => {
     }
 
     try {
-      const fileContent = await fs.readFileSync(filePath, "utf-8")
+      const fileContent = fs.readFileSync(filePath, "utf-8")
       const aquaObject = JSON.parse(fileContent)
       console.log(`Successfully read: ${filePath}`)
       all_file_aqua_objects.push(aquaObject)
@@ -534,12 +534,10 @@ const maybeUpdateFileIndex = (aquaObject, verificationData, revisionType) => {
   switch (revisionType) {
     case "form":
       verificationHash = verificationData.verification_hash
-      // fileHash = verificationData.data.file_hash
       aquaObject.file_index[verificationHash] = form_file_name
       break
     case "file":
       verificationHash = verificationData.verification_hash
-      // fileHash = verificationData.data.file_hash
       aquaObject.file_index[verificationHash] = filename
       break
     case "link":
@@ -548,172 +546,6 @@ const maybeUpdateFileIndex = (aquaObject, verificationData, revisionType) => {
       for (const [idx, vh] of linkVHs.entries()) {
         aquaObject.file_index[vh] = `${linkURIsArray[idx]}`
       }
-  }
-}
-
-const removeRevision = (aquaObject, lastRevisionHash, aquaFilename) => {
-  const lastRevision = aquaObject.revisions[lastRevisionHash]
-  switch (lastRevision.revision_type) {
-    case "file":
-      delete aquaObject.file_index[lastRevision.file_hash]
-      break
-    case "link":
-      for (const vh of lastRevision.link_verification_hashes) {
-        delete aquaObject.file_index[vh]
-      }
-  }
-
-  delete aquaObject.revisions[lastRevisionHash]
-  console.log(`Most recent revision ${lastRevisionHash} has been removed`)
-  if (Object.keys(aquaObject.revisions).length === 0) {
-    // If there are no revisions left, delete the .aqua.json file
-    try {
-      fs.unlinkSync(aquaFilename)
-      console.log(
-        `${aquaFilename} has been deleted because there are no revisions left.`,
-      )
-      // Since we've deleted the file, there's no need to return here; the script should end.
-    } catch (err) {
-      console.error(`Failed to delete ${aquaFilename}:`, err)
-    }
-  } else {
-    serializeAquaObject(aquaFilename, aquaObject)
-  }
-}
-
-const createNewRevision = async (
-  previousVerificationHash,
-  timestamp,
-  revision_type,
-  enableScalar,
-  aquaObject,
-) => {
-  const validRevisionTypes = ["file", "signature", "witness", "form", "link"]
-  if (!validRevisionTypes.includes(revision_type)) {
-    console.error(`Invalid revision type: ${revision_type}`)
-    process.exit(1)
-  }
-
-  let verificationData = {
-    previous_verification_hash: previousVerificationHash,
-    local_timestamp: timestamp,
-    revision_type,
-  }
-
-  let fileHash
-  switch (revision_type) {
-    case "file":
-      const fileContent = fs.readFileSync(filename)
-      fileHash = main.getHashSum(fileContent)
-      checkFileHashAlreadyNotarized(fileHash, aquaObject)
-      if (enableContent) {
-        verificationData["content"] = fileContent.toString("utf8")
-      }
-      verificationData["file_hash"] = fileHash
-      verificationData["file_nonce"] = prepareNonce()
-      break
-    case "signature":
-      const sigData = await prepareSignature(previousVerificationHash)
-      verificationData = { ...verificationData, ...sigData }
-      break
-    case "witness":
-      const witness = await prepareWitness(previousVerificationHash)
-      verificationData = { ...verificationData, ...witness }
-      // verificationData.witness_merkle_proof = JSON.stringify(
-      //   verificationData.witness_merkle_proof,
-      // )
-      break
-    case "form":
-      let form_data
-      try {
-        // Read the file
-        form_data = fs.readFileSync(form_file_name)
-      } catch (readError) {
-        // Handle file read errors (e.g., file not found, permission issues)
-        console.error(
-          "Error: Unable to read the file. Ensure the file exists and is accessible.",
-        )
-        process.exit(1)
-      }
-
-      // Calculate the hash of the file
-      fileHash = main.getHashSum(form_data)
-      checkFileHashAlreadyNotarized(fileHash, aquaObject)
-      verificationData["file_hash"] = fileHash
-      verificationData["file_nonce"] = prepareNonce()
-
-      let form_data_json
-      try {
-        // Attempt to parse the JSON data
-        form_data_json = JSON.parse(form_data)
-      } catch (parseError) {
-        // Handle invalid JSON data
-        console.error("Error: The file does not contain valid JSON data.")
-        process.exit(1)
-      }
-
-      // Sort the keys
-      let form_data_sorted_keys = Object.keys(form_data_json)
-      let form_data_sorted_with_prefix = {}
-      for (let key of form_data_sorted_keys) {
-        form_data_sorted_with_prefix[`forms_${key}`] = form_data_json[key]
-      }
-
-      verificationData = {
-        ...verificationData,
-        ...form_data_sorted_with_prefix,
-      }
-      break
-
-    case "link":
-      const linkURIsArray = linkURIs.split(",")
-      // Validation
-      linkURIsArray.map((uri) => {
-        if (!uri.endsWith(".aqua.json")) return
-        console.error(`${uri} is an Aqua file hence not applicable`)
-        process.exit(1)
-      })
-      const linkAquaFiles = linkURIsArray.map((e) => `${e}.aqua.json`)
-      const linkVHs = linkAquaFiles.map(getLatestVH)
-      const linkFileHashes = linkURIsArray.map(main.getFileHashSum)
-      // Validation again
-      linkFileHashes.map((fh) => {
-        if (!(fh in aquaObject.file_index)) return
-        console.error(
-          `${fh} detected in file index. You are not allowed to interlink Aqua files of the same file`,
-        )
-        process.exit(1)
-      })
-
-      const linkData = {
-        link_type: "aqua",
-        link_require_indepth_verification: true,
-        link_verification_hashes: linkVHs,
-        link_file_hashes: linkFileHashes,
-      }
-      verificationData = { ...verificationData, ...linkData }
-  }
-
-  if (enableScalar) {
-    // A simpler version of revision -- scalar
-    const scalarData = verificationData //JSON.stringify(verificationData)
-    return {
-      verification_hash:
-        "0x" + main.getHashSum(JSON.stringify(verificationData)),
-      data: scalarData,
-    }
-  }
-
-  // Merklelize the dictionary
-  const leaves = main.dict2Leaves(verificationData)
-  const tree = new MerkleTree(leaves, main.getHashSum, {
-    duplicateOdd: false,
-  })
-
-  verificationData.leaves = leaves
-  return {
-    verification_hash: tree.getHexRoot(),
-    data: verificationData,
   }
 }
 
@@ -730,27 +562,205 @@ const createGenesisRevision = async (aquaFilename, timestamp) => {
     }
   }
 
-  const aquaObject = createNewAquaObject()
-  const revisions = aquaObject.revisions
-
-  const genesis = await createNewRevision(
-    "",
-    timestamp,
-    revisionType,
-    enableScalar,
-    aquaObject,
-  )
   if (enableRemoveRevision) {
     // Don't serialize if you do --rm during genesis creation
     console.log("There is nothing delete.")
     return
   }
-  revisions[genesis.verification_hash] = genesis.data
+
+  const aquaTree = new AquaTree(null, timestamp=timestamp, revisionType=revisionType, enableScalar=enableScalar)
+
   console.log(
-    `Writing new ${revisionType} revision ${genesis.verification_hash} to ${filename}.aqua.json`,
+    `Writing new ${revisionType} revision ${aquaTree.lastRevisionHash} to ${filename}.aqua.json`,
   )
-  maybeUpdateFileIndex(aquaObject, genesis, revisionType)
-  serializeAquaObject(aquaFilename, aquaObject)
+  serializeAquaObject(aquaFilename, aquaTree.aquaObject)
+}
+
+class AquaTree {
+  constructor(aquaFilename = null, timestamp = null, revisionType = null, enableScalar = true) {
+    if (aquaFilename !== null) {
+      this.read(aquaFilename)
+    } else if (timestamp !== null && revisionType !== null) {
+      this.aquaObject = createNewAquaObject()
+      this.lastRevisionHash = ""
+      this.createNewRevision(timestamp, revisionType, enableScalar)
+    }
+  }
+
+  read = (aquaFilename) => {
+    this.aquaFilename = aquaFilename
+    this.aquaObject = JSON.parse(fs.readFileSync(aquaFilename))
+    const revisions = this.aquaObject.revisions
+    const verificationHashes = Object.keys(revisions)
+    this.lastRevisionHash = verificationHashes[verificationHashes.length - 1]
+  }
+
+  removeLastRevision = () => {
+    const lastRevision = this.aquaObject.revisions[this.lastRevisionHash]
+    switch (lastRevision.revision_type) {
+      case "file":
+        delete this.aquaObject.file_index[lastRevision.file_hash]
+        break
+      case "link":
+        for (const vh of lastRevision.link_verification_hashes) {
+          delete this.aquaObject.file_index[vh]
+        }
+    }
+
+    delete this.aquaObject.revisions[lastRevisionHash]
+    console.log(`Most recent revision ${lastRevisionHash} has been removed`)
+    if (Object.keys(this.aquaObject.revisions).length === 0) {
+      // If there are no revisions left, delete the .aqua.json file
+      try {
+        fs.unlinkSync(this.aquaFilename)
+        console.log(
+          `${this.aquaFilename} has been deleted because there are no revisions left.`,
+        )
+        // Since we've deleted the file, there's no need to return here; the script should end.
+      } catch (err) {
+        console.error(`Failed to delete ${this.aquaFilename}:`, err)
+      }
+    } else {
+      serializeAquaObject(this.aquaFilename, this.aquaObject)
+    }
+  }
+
+  createNewRevision = async (timestamp, revisionType, enableScalar) => {
+    const previousVerificationHash = this.lastRevisionHash
+    const validRevisionTypes = ["file", "signature", "witness", "form", "link"]
+    if (!validRevisionTypes.includes(revisionType)) {
+      console.error(`Invalid revision type: ${revisionType}`)
+      process.exit(1)
+    }
+
+    let verificationData = {
+      previous_verification_hash: previousVerificationHash,
+      local_timestamp: timestamp,
+      revision_type: revisionType,
+    }
+
+    let fileHash
+    switch (revisionType) {
+      case "file":
+        const fileContent = fs.readFileSync(filename)
+        fileHash = main.getHashSum(fileContent)
+        checkFileHashAlreadyNotarized(fileHash, this.aquaObject)
+        if (enableContent) {
+          verificationData["content"] = fileContent.toString("utf8")
+        }
+        verificationData["file_hash"] = fileHash
+        verificationData["file_nonce"] = prepareNonce()
+        break
+      case "signature":
+        const sigData = await prepareSignature(previousVerificationHash)
+        verificationData = { ...verificationData, ...sigData }
+        break
+      case "witness":
+        const witness = await prepareWitness(previousVerificationHash)
+        verificationData = { ...verificationData, ...witness }
+        // verificationData.witness_merkle_proof = JSON.stringify(
+        //   verificationData.witness_merkle_proof,
+        // )
+        break
+      case "form":
+        let form_data
+        try {
+          // Read the file
+          form_data = fs.readFileSync(form_file_name)
+        } catch (readError) {
+          // Handle file read errors (e.g., file not found, permission issues)
+          console.error(
+            "Error: Unable to read the file. Ensure the file exists and is accessible.",
+          )
+          process.exit(1)
+        }
+
+        // Calculate the hash of the file
+        fileHash = main.getHashSum(form_data)
+        checkFileHashAlreadyNotarized(fileHash, this.aquaObject)
+        verificationData["file_hash"] = fileHash
+        verificationData["file_nonce"] = prepareNonce()
+
+        let form_data_json
+        try {
+          // Attempt to parse the JSON data
+          form_data_json = JSON.parse(form_data)
+        } catch (parseError) {
+          // Handle invalid JSON data
+          console.error("Error: The file does not contain valid JSON data.")
+          process.exit(1)
+        }
+
+        // Sort the keys
+        let form_data_sorted_keys = Object.keys(form_data_json)
+        let form_data_sorted_with_prefix = {}
+        for (let key of form_data_sorted_keys) {
+          form_data_sorted_with_prefix[`forms_${key}`] = form_data_json[key]
+        }
+
+        verificationData = {
+          ...verificationData,
+          ...form_data_sorted_with_prefix,
+        }
+        break
+
+      case "link":
+        const linkURIsArray = linkURIs.split(",")
+        // Validation
+        linkURIsArray.map((uri) => {
+          if (!uri.endsWith(".aqua.json")) return
+          console.error(`${uri} is an Aqua file hence not applicable`)
+          process.exit(1)
+        })
+        const linkAquaFiles = linkURIsArray.map((e) => `${e}.aqua.json`)
+        const linkVHs = linkAquaFiles.map(getLatestVH)
+        const linkFileHashes = linkURIsArray.map(main.getFileHashSum)
+        // Validation again
+        linkFileHashes.map((fh) => {
+          if (!(fh in this.aquaObject.file_index)) return
+          console.error(
+            `${fh} detected in file index. You are not allowed to interlink Aqua files of the same file`,
+          )
+          process.exit(1)
+        })
+
+        const linkData = {
+          link_type: "aqua",
+          link_require_indepth_verification: true,
+          link_verification_hashes: linkVHs,
+          link_file_hashes: linkFileHashes,
+        }
+        verificationData = { ...verificationData, ...linkData }
+    }
+
+    let verificationHash, out
+    if (enableScalar) {
+      // A simpler version of revision -- scalar
+      const scalarData = verificationData //JSON.stringify(verificationData)
+      verificationHash = "0x" + main.getHashSum(JSON.stringify(verificationData))
+      out =  {
+        verification_hash: verificationHash,
+        data: scalarData,
+      }
+    } else {
+      // Merklelize the dictionary
+      const leaves = main.dict2Leaves(verificationData)
+      const tree = new MerkleTree(leaves, main.getHashSum, {
+        duplicateOdd: false,
+      })
+      verificationData.leaves = leaves
+      verificationHash = tree.getHexRoot()
+      out = {
+        verification_hash: verificationHash,
+        data: verificationData,
+      }
+    }
+
+    this.lastRevisionHash = verificationHash
+    this.aquaObject.revisions[this.lastRevisionHash] = verificationData
+    maybeUpdateFileIndex(this.aquaObject, out, revisionType)
+    return out
+  }
 }
 
 // The main function
@@ -789,13 +799,10 @@ const createGenesisRevision = async (aquaFilename, timestamp) => {
     return
   }
 
-  const aquaObject = JSON.parse(fs.readFileSync(aquaFilename))
-  const revisions = aquaObject.revisions
-  const verificationHashes = Object.keys(revisions)
-  const lastRevisionHash = verificationHashes[verificationHashes.length - 1]
+  const aquaTree = new AquaTree(aquaFilename)
 
   if (enableRemoveRevision) {
-    removeRevision(aquaObject, lastRevisionHash, aquaFilename)
+    aquaTree.removeLastRevision()
     return
   }
 
@@ -806,16 +813,8 @@ const createGenesisRevision = async (aquaFilename, timestamp) => {
 
   console.log("Revision type: ", revisionType)
 
-  const verificationData = await createNewRevision(
-    lastRevisionHash,
-    timestamp,
-    revisionType,
-    enableScalar,
-    aquaObject,
-  )
+  const verificationData = aquaTree.createNewRevision(timestamp, revisionType, enableScalar)
   const verificationHash = verificationData.verification_hash
-  revisions[verificationHash] = verificationData.data
   console.log(`Writing new revision ${verificationHash} to ${aquaFilename}`)
-  maybeUpdateFileIndex(aquaObject, verificationData, revisionType)
-  serializeAquaObject(aquaFilename, aquaObject)
+  serializeAquaObject(aquaFilename, aquaTree.aquaObject)
 })()
